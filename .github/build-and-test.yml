@@ -1,0 +1,48 @@
+
+name: Reusable Maven Build
+on:
+  workflow_call:
+    inputs:
+      java-version:
+        required: false
+        type: string
+        default: '21'
+      working-directory:
+        type: string
+        default: '.'
+
+jobs:
+ maven-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+
+      - name: Set up JDK ${{ inputs.java-version }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ inputs.java-version }}
+          distribution: 'temurin'
+
+      - name: Cache Maven packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+
+
+      - name: Maven Clean Install
+        working-directory: ${{ inputs.working-directory }}
+        run: mvn clean install -B -DskipTests=false
+         # works for public maven repositories
+
+      # --- ADD THIS NEW STEP ---
+      - name: Upload compiled jar
+        uses: actions/upload-artifact@v4
+        with:
+          name: compiled-jar-${{ github.run_id }}
+          path: ${{ inputs.working-directory }}/target/*.jar
+          retention-days: 1 # Keep it brief to save storage space
+
+
+
