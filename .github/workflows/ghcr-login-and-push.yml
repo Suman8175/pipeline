@@ -84,7 +84,7 @@ jobs:
       - name: Compute Docker Image Tag
         id: meta
         run: |
-          OORG=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          ORG=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
           SERVICE=$(echo "${{ inputs.service-name }}" | tr '[:upper:]' '[:lower:]')
           VERSION="${{ inputs.version }}"
           BRANCH="${{ github.ref_name }}"
@@ -126,8 +126,6 @@ jobs:
           context: ${{ steps.paths.outputs.context }}
           file: ${{ steps.paths.outputs.dockerfile }}
           push: ${{ inputs.push-image }}
-          tags: |
-              ghcr.io/${{ env.REPO_LOWER }}:${{ github.sha }}
-              ghcr.io/${{ env.REPO_LOWER }}:latest
+          tags: ${{ steps.meta.outputs.tags }}
 
 
