@@ -1,0 +1,130 @@
+name: Creates docker image and push to Container Registry
+on:
+  workflow_call:
+    inputs:
+      service-name:
+        required: true
+        type: string
+        description: 'Name of the micro-service'
+
+      dockerfile-path:
+        required: false
+        type: string
+        description: 'Path to the Dockerfile'
+        default: ''
+
+      build-context:
+        required: false
+        type: string
+        description: 'Path to the build context'
+        default: ''
+
+      version:
+        required: false
+        type: string
+        default: 'latest'
+        description: 'Semantic version for the Docker image, e.g. 2.4.4'
+
+      push-image:
+        required: false
+        type: boolean
+        default: true
+        description: 'Whether to push the Docker image'
+
+    secrets:
+      GHCR_TOKEN:
+        required: true
+        description: 'GitHub token for authentication to GitHub Container Registry'
+
+
+jobs:
+  docker-build:
+    name: Build and Push -${{ inputs.service-name }}
+    runs-on: ubuntu-latest
+
+
+
+    steps:
+
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+
+      - name: Resolve DockerFile Path and Build Context
+        id: paths
+        run: |
+          SERVICE="${{ inputs.service-name }}"
+          
+          DOCKERFILE="${{ inputs.dockerfile-path }}"
+          if [ -z "$DOCKERFILE" ]; then
+            DOCKERFILE="Dockerfile"
+          fi
+          
+          CONTEXT="${{ inputs.build-context }}"
+          if [ -z "$CONTEXT" ]; then
+            CONTEXT="."
+          fi
+          
+          echo "dockerfile=$DOCKERFILE" >> $GITHUB_OUTPUT
+          echo "context=$CONTEXT"       >> $GITHUB_OUTPUT
+          
+          # Fail early if Dockerfile is missing — clear error instead of cryptic docker error
+          if [ ! -f "$DOCKERFILE" ]; then
+            echo "::error::Dockerfile not found at '$DOCKERFILE'. Did you forget to set dockerfile-path?"
+            exit 1
+          fi
+
+      - name: Download compiled jar
+        uses: actions/download-artifact@v4
+        with:
+          name: compiled-jar-${{ github.run_id }}
+          path: ${{ steps.paths.outputs.context }}/target/
+
+      - name: Compute Docker Image Tag
+        id: meta
+        run: |
+          ORG="${{ github.repository_owner }}"
+          SERVICE="${{ inputs.service-name }}"
+          VERSION="${{ inputs.version }}"
+          BRANCH="${{ github.ref_name }}"
+          IMAGE="ghcr.io/${ORG}/${SERVICE}"
+          echo "Version : $VERSION"
+          echo "Branch  : $BRANCH"
+          echo "Image   : $IMAGE"
+           {
+            echo "tags<<EOF"
+
+
+            # Immutable Git commit reference
+            echo "${IMAGE}:sha-${GITHUB_SHA::7}"
+
+            # Moving environment tag
+            if [ "$BRANCH" = "uat" ]; then
+              echo "${IMAGE}:uat"
+            elif [ "$BRANCH" = "production" ]; then
+              echo "${IMAGE}:production"
+            fi
+          # Semantic version tag - only for releases
+            if [ -n "$VERSION" ]; then
+              echo "${IMAGE}:${VERSION}"
+            fi
+
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GHCR_TOKEN }}
+
+      - name: Build and Push Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ steps.paths.outputs.context }}
+          file: ${{ steps.paths.outputs.dockerfile }}
+          push: ${{ inputs.push-image }}
+          tags: ${{ steps.meta.outputs.tags }}
+
+

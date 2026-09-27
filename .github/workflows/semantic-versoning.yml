@@ -1,0 +1,162 @@
+name: Generate Semantic Version For Release
+on:
+  workflow_call:
+    inputs:
+      dry-run:
+        type: boolean
+        required: false
+        default: false
+        description: 'If true, calculates the next version but does NOT create a tag or release'
+
+      default-bump:
+        type: string
+        required: false
+        default: 'patch'
+        description: 'Fallback bump type if no conventional commit prefix is found (major | minor | patch)'
+
+
+      tag-prefix:
+        required: false
+        type: string
+        default: 'v'
+        description: 'Prefix for the version tag, e.g. "v" produces v1.2.3'
+
+    outputs:
+      new-version:
+        description: 'The newly calculated semver string, e.g. 1.2.3'
+        value: ${{ jobs.version.outputs.new-version }}
+
+      new-tag:
+        description: 'The new tag including prefix, e.g. v1.2.3'
+        value: ${{ jobs.version.outputs.new-tag }}
+
+      previous-tag:
+        description: 'The tag that was used as the baseline for this bump'
+        value: ${{ jobs.version.outputs.previous-tag }}
+
+      bump-type:
+        description: 'Which part was bumped: major | minor | patch'
+        value: ${{ jobs.version.outputs.bump-type }}
+
+    secrets:
+      GHCR_TOKEN:
+        required: true
+        description: 'GitHub token with contents:write and actions:read permissions'
+
+jobs:
+  version:
+    name: Calculate Semantic Version
+    runs-on: ubuntu-latest
+
+    outputs:
+      new-version: ${{ steps.calc.outputs.new-version }}
+      new-tag: ${{ steps.calc.outputs.new-tag }}
+      previous-tag: ${{ steps.calc.outputs.previous-tag }}
+      bump-type: ${{ steps.calc.outputs.bump-type }}
+
+
+    steps:
+      - name: Checkout (full history required for tag comparison)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GHCR_TOKEN }}
+
+
+      - name: Calculate Next Version
+        id: calc
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PREFIX="${{ inputs.tag-prefix }}"
+          DEFAULT_BUMP="${{ inputs.default-bump }}"
+
+          # Find the latest version tag reachable from the current branch.
+          LATEST_TAG=$(git describe \
+          --tags \
+          --match "${PREFIX}*" \
+          --abbrev=0 \
+          HEAD 2>/dev/null || true)
+          
+          if [ -z "$LATEST_TAG" ]; then
+          echo "No reachable tags found with prefix '${PREFIX}' — starting at ${PREFIX}0.0.0"
+          LATEST_TAG="${PREFIX}0.0.0"
+          COMMIT_RANGE="HEAD"
+          else
+          COMMIT_RANGE="${LATEST_TAG}..HEAD"
+          fi
+          echo "Previous tag : $LATEST_TAG"
+          echo "Commit range : $COMMIT_RANGE"
+
+          # Strip prefix to get pure semver
+          CURRENT_VERSION="${LATEST_TAG#"$PREFIX"}"
+          MAJOR=$(echo "$CURRENT_VERSION" | cut -d. -f1)
+          MINOR=$(echo "$CURRENT_VERSION" | cut -d. -f2)
+          PATCH=$(echo "$CURRENT_VERSION" | cut -d. -f3)
+
+          # ── 2. Analyse commits since last tag ────────────────────────────
+          BUMP="$DEFAULT_BUMP"
+
+          while IFS= read -r line; do
+          # BREAKING CHANGE in footer or ! after type
+          if echo "$line" | grep -qiE '(BREAKING[[:space:]]CHANGE|^[a-z]+(\([^)]*\))?!:)'; then
+           BUMP="major"
+           break            # Can't go higher — stop scanning
+          fi
+
+          if [ "$BUMP" != "major" ] && echo "$line" | grep -qE '^feat(\([^)]*\))?:'; then
+           BUMP="minor"
+          fi
+          done < <(git log "$COMMIT_RANGE" --pretty=format:"%s%n%b")
+
+          echo "Detected bump type: $BUMP"
+
+          # ── 3. Apply the bump ─────────────────────────────────────────────
+          case "$BUMP" in
+          major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+          minor) MINOR=$((MINOR + 1)); PATCH=0          ;;
+          patch) PATCH=$((PATCH + 1))                   ;;
+          esac
+
+          NEW_VERSION="${MAJOR}.${MINOR}.${PATCH}"
+          NEW_TAG="${PREFIX}${NEW_VERSION}"
+
+          echo "new-version=${NEW_VERSION}"   >> "$GITHUB_OUTPUT"
+          echo "new-tag=${NEW_TAG}"           >> "$GITHUB_OUTPUT"
+          echo "previous-tag=${LATEST_TAG}"   >> "$GITHUB_OUTPUT"
+          echo "bump-type=${BUMP}"            >> "$GITHUB_OUTPUT"
+
+          echo "──────────────────────────────────────"
+          echo " Previous : $LATEST_TAG"
+          echo " Bump     : $BUMP"
+          echo " New tag  : $NEW_TAG"
+          echo "──────────────────────────────────────"
+          
+      - name: Create Git Tag
+        if: inputs.dry-run == false
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GHCR_TOKEN }}
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          git tag \
+            -a "${{ steps.calc.outputs.new-tag }}" \
+            -m "Release ${{ steps.calc.outputs.new-tag }}"
+          
+          git push origin "${{ steps.calc.outputs.new-tag }}"
+          
+          echo "✅ Tagged ${{ steps.calc.outputs.new-tag }} and pushed."
+
+      - name: Summary
+        shell: bash
+        run: |
+          echo "### 🏷️ Semantic Version Result" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Field | Value |"              >> "$GITHUB_STEP_SUMMARY"
+          echo "|-------|-------|"              >> "$GITHUB_STEP_SUMMARY"
+          echo "| Previous tag | \`${{ steps.calc.outputs.previous-tag }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Bump type    | \`${{ steps.calc.outputs.bump-type }}\`    |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| New tag      | \`${{ steps.calc.outputs.new-tag }}\`      |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Dry run      | \`${{ inputs.dry-run }}\`                  |" >> "$GITHUB_STEP_SUMMARY"
