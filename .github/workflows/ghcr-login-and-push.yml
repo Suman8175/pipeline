@@ -38,6 +38,7 @@ on:
 
 
 jobs:
+
   docker-build:
     name: Build and Push -${{ inputs.service-name }}
     runs-on: ubuntu-latest
@@ -83,8 +84,8 @@ jobs:
       - name: Compute Docker Image Tag
         id: meta
         run: |
-          ORG="${{ github.repository_owner }}"
-          SERVICE="${{ inputs.service-name }}"
+          OORG=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          SERVICE=$(echo "${{ inputs.service-name }}" | tr '[:upper:]' '[:lower:]')
           VERSION="${{ inputs.version }}"
           BRANCH="${{ github.ref_name }}"
           IMAGE="ghcr.io/${ORG}/${SERVICE}"
@@ -125,6 +126,8 @@ jobs:
           context: ${{ steps.paths.outputs.context }}
           file: ${{ steps.paths.outputs.dockerfile }}
           push: ${{ inputs.push-image }}
-          tags: ${{ steps.meta.outputs.tags }}
+          tags: |
+              ghcr.io/${{ env.REPO_LOWER }}:${{ github.sha }}
+              ghcr.io/${{ env.REPO_LOWER }}:latest
 
 
